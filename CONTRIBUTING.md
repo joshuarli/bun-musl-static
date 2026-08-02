@@ -220,6 +220,48 @@ $ bun run build:release
 
 The binary will be located at `./build/release/bun` and `./build/release/bun-profile`.
 
+### Fully static musl builds
+
+On Alpine Linux, the native Linux build uses Clang/LLD and links the musl libc,
+`libstdc++`, and `libgcc` statically. GCC is still installed by Alpine because
+Clang's `-static-libstdc++` and `-static-libgcc` options consume those archive
+files; `CC=clang`, `CXX=clang++`, and `LD=ld.lld` select the compiler and linker.
+
+```sh
+CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib LD=ld.lld bun run build:release
+```
+
+Verify the result itself, rather than inferring linkage from the host:
+
+```sh
+file build/release/bun
+readelf -l build/release/bun | grep INTERP       # must print nothing
+readelf -d build/release/bun | grep NEEDED       # must print nothing
+ldd build/release/bun                             # must reject it as non-dynamic
+```
+
+The ARM64 Docker smoke test also proves allocator provenance: it checks the
+unstripped profile's linker map and `mi_*` symbols, then queries
+`bun:jsc` `heapStats()`/`heapStats({ dump: true })` for live mimalloc pages and
+heaps. The stripped artifact is run again in the final Alpine stage, where no
+libstdc++/libgcc runtime packages are installed.
+
+The ARM64-native recipe is [Dockerfile.arm64-static-musl](/Dockerfile.arm64-static-musl).
+Build it on an ARM64 runner with:
+
+```sh
+docker build --platform=linux/arm64 \
+  -f Dockerfile.arm64-static-musl .
+```
+
+The static executable still uses kernel-provided interfaces and a container's
+normal virtual mounts such as `/dev` and `/proc`; a literal empty `chroot` is
+not equivalent to a container and can fail when `/dev/urandom` is absent.
+Rust's ASAN runtime is incompatible with statically linked musl libc, so the
+build system forces ASAN off for musl debug builds while retaining assertions.
+Static linking also does not make separately loaded native addons or FFI
+libraries self-contained.
+
 ### Download release build from pull requests
 
 To save you time spent building a release build locally, we provide a way to run release builds from pull requests. This is useful for manually testing changes in a release build before they are merged.

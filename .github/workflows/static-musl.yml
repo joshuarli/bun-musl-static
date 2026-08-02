@@ -1,0 +1,32 @@
+name: Static musl build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    name: Native ARM64 Alpine static musl
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build static musl image
+        run: |
+          docker build \
+            --platform=linux/arm64 \
+            --file Dockerfile.arm64-static-musl \
+            --tag bun-static-musl:test .
+
+      - name: Run static musl smoke tests
+        run: |
+          docker run --rm --platform=linux/arm64 bun-static-musl:test --version
+          docker run --rm --platform=linux/arm64 bun-static-musl:test -e 'console.log("ok")'
+          docker run --rm --platform=linux/arm64 bun-static-musl:test -e 'console.log(40 + 2)'
+          docker run --rm --platform=linux/arm64 bun-static-musl:test -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing"); console.log(`mimalloc ${s.mimalloc.mimalloc_version}`)'
