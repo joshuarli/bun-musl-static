@@ -8,6 +8,9 @@ examples
 node_modules
 packages/**/bun
 packages/**/bun-profile
+# This is a workspace package, not a compiled Bun binary.
+!packages/@types/bun
+!packages/@types/bun/**
 src/bun.js/WebKit
 src/bun.js/WebKit/LayoutTests
 build

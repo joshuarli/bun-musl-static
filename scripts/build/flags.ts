@@ -1174,13 +1174,13 @@ export const linkerFlags: Flag[] = [
   },
   {
     flag: ["-static-libstdc++", "-static-libgcc"],
-    when: c => c.linux && c.abi === "gnu",
-    desc: "Static C++ runtime (don't depend on host libstdc++)",
+    when: c => c.linux && (c.abi === "gnu" || c.abi === "musl"),
+    desc: "Static C++ runtime (don't depend on host libstdc++/libgcc_s)",
   },
   {
-    flag: ["-lstdc++", "-lgcc"],
+    flag: "-static",
     when: c => c.linux && c.abi === "musl",
-    desc: "Dynamic C++ runtime on musl (static unavailable)",
+    desc: "Static musl libc (no ELF interpreter or libc runtime dependency)",
   },
   {
     flag: c => [
