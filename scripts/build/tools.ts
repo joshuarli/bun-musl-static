@@ -264,9 +264,10 @@ export function findTool(spec: ToolSpec): FoundTool | undefined {
  * LLVM version constraint. Any version in the same major.minor range is
  * accepted (e.g. Alpine 3.23 ships 21.1.2 while we target 21.1.8).
  */
-export const LLVM_VERSION = "21.1.8";
-const LLVM_MAJOR = "21";
-const LLVM_MINOR = "1";
+// The repository default stays pinned to Alpine's LLVM 21 line. Build images
+// may opt into another tested LLVM line without changing the host default.
+export const LLVM_VERSION = process.env.BUN_LLVM_VERSION ?? "21.1.8";
+const [LLVM_MAJOR = "21", LLVM_MINOR = "1"] = LLVM_VERSION.split(".");
 const LLVM_VERSION_RANGE = `>=${LLVM_MAJOR}.${LLVM_MINOR}.0 <${LLVM_MAJOR}.${LLVM_MINOR}.99`;
 
 /**

@@ -1,0 +1,127 @@
+# ARM64 Alpine static-musl build using the prebuilt LLVM 22 musl toolchain.
+# This is a size-comparison variant of Dockerfile.arm64-static-musl.
+#
+# Root-cause report (2026-08-03):
+# - A native x86_64 capture/replay with 1,178 explicit ThinLTO inputs reproduces
+#   the ARM64/QEMU final-link SIGSEGV, so emulation and target ELF layout are not
+#   the cause.
+# - GDB resolves the crash to LLVM 22.1.8's computeKnownBitsAddSub inside the
+#   in-process ThinLTO optimizer. The pass trace reaches jpeg's encode_one_block
+#   IR before lld dies during ordinary InstCombine processing.
+# - The crash reproduces with whole-program visibility on and off, one or many
+#   lld threads, and ThinLTO optimization levels O1 and O2. It is therefore a
+#   prebuilt LLVM 22 optimizer failure, not a mimalloc, static-musl, or debug
+#   index failure. The captured native build is the reusable diagnostic repro.
+# - The ld wrapper below only removes Alpine's zlib-compressed debug-section
+#   flag, which the prebuilt lld does not support; it does not work around the
+#   ThinLTO crash. Alpine edge's distro LLVM 22 is tested separately in
+#   Dockerfile.arm64-static-musl-llvm22-alpine-native.
+
+FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS build
+
+ARG LLVM_VERSION=22.1.8
+ARG LLVM_ARCH=aarch64
+ARG APK_ARCH=aarch64
+ARG BUN_ARCH=aarch64
+ARG BUN_BOOTSTRAP_VERSION=1.3.13
+ARG BUN_BOOTSTRAP_SHA256=5385e978107ce4934298d8d6afe9bfbb898683f6cc23e6753a0da60bc60c5b81
+ARG BUN_LTO=on
+ARG BUN_CAPTURE_ONLY=0
+ARG RUST_NIGHTLY=nightly-2026-07-20
+ARG BUN_GIT_SHA=0000000000000000000000000000000000000000
+
+RUN apk add --no-cache \
+    build-base \
+    ca-certificates \
+    cmake \
+    curl \
+    file \
+    git \
+    icu-dev \
+    linux-headers \
+    ninja \
+    perl \
+    rustup \
+    unzip
+
+# The prebuilt lld is intentionally zlib-free. Alpine's static libc, CRT, and
+# compiler-runtime archives carry compressed debug sections, so strip those
+# inputs before any host or target link consumes them.
+RUN set -eu; \
+    for obj in /usr/lib/*crt*.o /usr/lib/Scrt1.o /usr/lib/*.a /usr/lib/gcc/*/*/*.a; do \
+        [ -e "$obj" ] || continue; \
+        strip --strip-debug "$obj"; \
+    done
+
+ADD https://github.com/laputa-systems/llvm-prebuilt-musl/releases/download/llvm-musl-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-${LLVM_ARCH}-linux-musl.tar.xz /tmp/llvm.tar.xz
+
+RUN mkdir -p /opt/llvm-musl \
+    && tar xf /tmp/llvm.tar.xz -C /opt/llvm-musl --strip-components=1 \
+    && rm /tmp/llvm.tar.xz \
+    && printf '%s\n' '-fuse-ld=lld' '-L/opt/llvm-musl/lib' '-lc++abi' '-lunwind' '-DHWY_BROKEN_SVE=HWY_SVE' '-DHWY_BROKEN_SVE2=HWY_SVE2' > /opt/llvm-musl/bin/clang++.cfg \
+    && mv /opt/llvm-musl/bin/ld.lld /opt/llvm-musl/bin/ld.lld.real \
+    && printf '%s\n' '#!/usr/bin/perl' '@ARGV = grep { $_ ne "--compress-debug-sections=zlib" } @ARGV;' 'exec { "/opt/llvm-musl/bin/ld.lld.real" } "ld.lld", @ARGV;' > /opt/llvm-musl/bin/ld.lld \
+    && chmod 0755 /opt/llvm-musl/bin/ld.lld
+
+ENV PATH=/opt/llvm-musl/bin:/root/.cargo/bin:/usr/local/bin:$PATH \
+    CC=/opt/llvm-musl/bin/clang \
+    CXX=/opt/llvm-musl/bin/clang++ \
+    AR=/opt/llvm-musl/bin/llvm-ar \
+    RANLIB=/opt/llvm-musl/bin/llvm-ranlib \
+    LD=/opt/llvm-musl/bin/ld.lld \
+    GIT_SHA=${BUN_GIT_SHA} \
+    BUN_LLVM_VERSION=${LLVM_VERSION} \
+    BUN_DEBUG_QUIET_LOGS=1
+
+WORKDIR /src
+COPY . .
+
+RUN test "$(apk --print-arch)" = "${APK_ARCH}" \
+    && rustup-init -y --no-modify-path --profile minimal --default-toolchain none \
+    && rustup toolchain install "$RUST_NIGHTLY" --profile minimal \
+      --component rust-src --component rustfmt --component llvm-tools-preview \
+    && rustup default "$RUST_NIGHTLY"
+
+RUN curl -fsSL --retry 5 \
+      "https://pub-5e11e972747a44bf9aaf9394f185a982.r2.dev/releases/bun-v${BUN_BOOTSTRAP_VERSION}/bun-linux-${BUN_ARCH}-musl.zip" \
+      -o /tmp/bun-bootstrap.zip \
+    && echo "${BUN_BOOTSTRAP_SHA256}  /tmp/bun-bootstrap.zip" | sha256sum -c - \
+    && unzip -q /tmp/bun-bootstrap.zip -d /tmp/bun-bootstrap \
+    && install -m 0755 /tmp/bun-bootstrap/bun-linux-${BUN_ARCH}-musl/bun /usr/local/bin/bun \
+    && rm -rf /tmp/bun-bootstrap.zip /tmp/bun-bootstrap
+
+RUN if [ "${BUN_CAPTURE_ONLY}" = "1" ]; then \
+      bun run build:release --lto=${BUN_LTO} --configure-only \
+      && set -- $(ninja -C build/release -t query bun-profile | sed -n '/^  input: link$/,/^  outputs:/p' | sed -n 's/^    //p') \
+      && ninja -C build/release "$@"; \
+    else \
+      if ! bun run build:release --lto=${BUN_LTO} > /tmp/bun-build.log 2>&1; then \
+        grep -n -E -C 8 'error:|Error:|FAILED|failed' /tmp/bun-build.log | tail -n 240 || true; \
+        tail -n 120 /tmp/bun-build.log; \
+        exit 1; \
+      fi \
+      && file build/release/bun | grep -q 'statically linked' \
+      && test -z "$(readelf -l build/release/bun | grep 'INTERP' || true)" \
+      && test -z "$(readelf -d build/release/bun | grep 'NEEDED' || true)" \
+      && grep -q 'obj/vendor/mimalloc/src/static.c.o' build/release/bun-profile.linker-map \
+      && llvm-nm -a build/release/bun-profile | grep -Eq '[[:space:]]mi_(malloc|calloc|realloc|free)([[:space:]]|$)' \
+      && ! ldd build/release/bun 2>&1 \
+      && build/release/bun --version \
+      && test "$(build/release/bun -e 'console.log("ok")')" = "ok" \
+      && test "$(build/release/bun -e 'console.log(40 + 2)')" = "42" \
+      && build/release/bun -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing"); const d = heapStats({ dump: true }); if (!d.mimallocDump?.heaps?.some(h => h.seq === 0 && h.pages?.length)) throw new Error("mimalloc heap dump missing");'; \
+    fi
+
+FROM build AS capture
+
+FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+
+COPY --from=build /src/build/release/bun /usr/local/bin/bun
+
+RUN /usr/local/bin/bun --version \
+    && ! apk info -e | grep -Eq '^(gcompat|glibc|libgcc|libstdc\\+\\+)' \
+    && test "$(/usr/local/bin/bun -e 'console.log("ok")')" = "ok" \
+    && test "$(/usr/local/bin/bun -e 'console.log(40 + 2)')" = "42" \
+    && /usr/local/bin/bun -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing");'
+
+ENTRYPOINT ["/usr/local/bin/bun"]

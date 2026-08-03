@@ -14,6 +14,7 @@ packages/**/bun-profile
 src/bun.js/WebKit
 src/bun.js/WebKit/LayoutTests
 build
+dist
 vendor
 node_modules
 *.trace
