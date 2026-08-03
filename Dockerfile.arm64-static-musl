@@ -7,6 +7,7 @@ FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a
 ARG BUN_BOOTSTRAP_VERSION=1.3.13
 ARG BUN_BOOTSTRAP_SHA256=5385e978107ce4934298d8d6afe9bfbb898683f6cc23e6753a0da60bc60c5b81
 ARG RUST_NIGHTLY=nightly-2026-07-20
+ARG BUN_GIT_SHA=0000000000000000000000000000000000000000
 
 # build-base supplies the musl headers and GCC's static libstdc++/libgcc
 # archives. The compiler and linker used for Bun itself are Clang and LLD.
@@ -33,6 +34,7 @@ ENV PATH=/root/.cargo/bin:/usr/local/bin:$PATH \
     AR=llvm-ar \
     RANLIB=llvm-ranlib \
     LD=ld.lld \
+    GIT_SHA=${BUN_GIT_SHA} \
     BUN_DEBUG_QUIET_LOGS=1
 
 WORKDIR /src
@@ -60,7 +62,7 @@ RUN bun run build:release \
     && test -z "$(readelf -l build/release/bun | grep 'INTERP' || true)" \
     && test -z "$(readelf -d build/release/bun | grep 'NEEDED' || true)" \
     && grep -q 'obj/vendor/mimalloc/src/static.c.o' build/release/bun-profile.linker-map \
-    && llvm-nm -a build/release/bun-profile | grep -Eq '[[:space:]]mi_(malloc|calloc|realloc|free)([[:space:]]|$)' \
+    && /usr/lib/llvm21/bin/llvm-nm -a build/release/bun-profile | grep -Eq '[[:space:]]mi_(malloc|calloc|realloc|free)([[:space:]]|$)' \
     && ! ldd build/release/bun 2>&1 \
     && build/release/bun --version \
     && test "$(build/release/bun -e 'console.log("ok")')" = "ok" \
