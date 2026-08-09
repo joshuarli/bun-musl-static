@@ -1,30 +1,15 @@
-# ARM64 Alpine static-musl build using the prebuilt LLVM 22 musl toolchain.
-# This is a size-comparison variant of Dockerfile.arm64-static-musl.
-#
-# Root-cause report (2026-08-03):
-# - A native x86_64 capture/replay with 1,178 explicit ThinLTO inputs reproduces
-#   the ARM64/QEMU final-link SIGSEGV, so emulation and target ELF layout are not
-#   the cause.
-# - GDB resolves the crash to LLVM 22.1.8's computeKnownBitsAddSub inside the
-#   in-process ThinLTO optimizer. The pass trace reaches jpeg's encode_one_block
-#   IR before lld dies during ordinary InstCombine processing.
-# - The crash reproduces with whole-program visibility on and off, one or many
-#   lld threads, and ThinLTO optimization levels O1 and O2. It is therefore a
-#   prebuilt LLVM 22 optimizer failure, not a mimalloc, static-musl, or debug
-#   index failure. The captured native build is the reusable diagnostic repro.
-# - The ld wrapper below only removes Alpine's zlib-compressed debug-section
-#   flag, which the prebuilt lld does not support; it does not work around the
-#   ThinLTO crash. Alpine edge's distro LLVM 22 is tested separately in
-#   Dockerfile.arm64-static-musl-llvm22-alpine-native.
-
 FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS build
 
-ARG LLVM_VERSION=22.1.8
-ARG LLVM_ARCH=aarch64
-ARG APK_ARCH=aarch64
-ARG BUN_ARCH=aarch64
+ARG LLVM_VERSION=23.1.0-rc2
+ARG LLVM_ARCH=x86_64
+ARG LLVM_RELEASE_SHA=6eb5fb9
+ARG LLVM_SHA256=36647cca0bf57d206a6ce757d07a9d8489ef6ccf283a2cc7f740d1cba99a088b
+# Bump when clang++.cfg or another compiler-wrapper contract changes.
+ARG LLVM_TOOLCHAIN_REV=libstdcxx-static-4
+ARG APK_ARCH=x86_64
+ARG BUN_ARCH=x64
 ARG BUN_BOOTSTRAP_VERSION=1.3.13
-ARG BUN_BOOTSTRAP_SHA256=5385e978107ce4934298d8d6afe9bfbb898683f6cc23e6753a0da60bc60c5b81
+ARG BUN_BOOTSTRAP_SHA256=5b91a48f0b00df9fd2da8bff1a795d2659d842da966432969203f25da19d1c74
 ARG BUN_LTO=on
 ARG BUN_CAPTURE_ONLY=0
 ARG RUST_NIGHTLY=nightly-2026-07-20
@@ -33,6 +18,7 @@ ARG BUN_GIT_SHA=0000000000000000000000000000000000000000
 RUN apk add --no-cache \
     build-base \
     ca-certificates \
+    ccache \
     cmake \
     curl \
     file \
@@ -53,12 +39,25 @@ RUN set -eu; \
         strip --strip-debug "$obj"; \
     done
 
-ADD https://github.com/laputa-systems/llvm-prebuilt-musl/releases/download/llvm-musl-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-${LLVM_ARCH}-linux-musl.tar.xz /tmp/llvm.tar.xz
+# Alpine names the target-specific libstdc++ headers with its distro triple,
+# while LLVM's target triple is x86_64-linux-musl.
+RUN set -eu; \
+    for inc in /usr/include/c++/*; do \
+        [ -d "$inc" ] || continue; \
+        src="$inc/${LLVM_ARCH}-alpine-linux-musl"; \
+        dst="$inc/${LLVM_ARCH}-linux-musl"; \
+        [ -d "$src" ] || continue; \
+        [ -e "$dst" ] || ln -s "$(basename "$src")" "$dst"; \
+    done
+
+ADD https://github.com/laputa-systems/llvm-prebuilt-musl/releases/download/llvm-musl-${LLVM_VERSION}-${LLVM_RELEASE_SHA}/clang+llvm-${LLVM_VERSION}-${LLVM_ARCH}-linux-musl.tar.xz /tmp/llvm.tar.xz
 
 RUN mkdir -p /opt/llvm-musl \
+    && echo "${LLVM_SHA256}  /tmp/llvm.tar.xz" | sha256sum -c - \
     && tar xf /tmp/llvm.tar.xz -C /opt/llvm-musl --strip-components=1 \
     && rm /tmp/llvm.tar.xz \
-    && printf '%s\n' '-fuse-ld=lld' '-L/opt/llvm-musl/lib' '-lc++abi' '-lunwind' '-DHWY_BROKEN_SVE=HWY_SVE' '-DHWY_BROKEN_SVE2=HWY_SVE2' > /opt/llvm-musl/bin/clang++.cfg \
+    && test -f /opt/llvm-musl/lib/libclang.so \
+    && printf '%s\n' '-stdlib=libstdc++' '-fuse-ld=lld' > /opt/llvm-musl/bin/clang++.cfg \
     && mv /opt/llvm-musl/bin/ld.lld /opt/llvm-musl/bin/ld.lld.real \
     && printf '%s\n' '#!/usr/bin/perl' '@ARGV = grep { $_ ne "--compress-debug-sections=zlib" } @ARGV;' 'exec { "/opt/llvm-musl/bin/ld.lld.real" } "ld.lld", @ARGV;' > /opt/llvm-musl/bin/ld.lld \
     && chmod 0755 /opt/llvm-musl/bin/ld.lld
@@ -69,9 +68,31 @@ ENV PATH=/opt/llvm-musl/bin:/root/.cargo/bin:/usr/local/bin:$PATH \
     AR=/opt/llvm-musl/bin/llvm-ar \
     RANLIB=/opt/llvm-musl/bin/llvm-ranlib \
     LD=/opt/llvm-musl/bin/ld.lld \
+    LIBRARY_PATH=/opt/llvm-musl/lib \
+    LIBCLANG_PATH=/opt/llvm-musl/lib \
+    CCACHE_DIR=/src/cache/ccache \
+    CCACHE_BASEDIR=/src \
+    CCACHE_COMPILERCHECK=content \
+    CCACHE_EXTRAFILES=/opt/llvm-musl/bin/clang++.cfg \
+    CCACHE_COMPRESS=true \
+    CCACHE_MAXSIZE=20G \
+    CCACHE_CC=/opt/llvm-musl/bin/clang \
+    CCACHE_CXX=/opt/llvm-musl/bin/clang++ \
     GIT_SHA=${BUN_GIT_SHA} \
     BUN_LLVM_VERSION=${LLVM_VERSION} \
     BUN_DEBUG_QUIET_LOGS=1
+
+# Fail early if the downloaded compiler cannot link the C and C++ runtime
+# combinations used by the full build. This keeps toolchain failures out of
+# the much slower Bun compilation step.
+RUN set -eu; \
+    printf '%s\n' 'int main(void) { return 0; }' \
+      | clang -x c - -lunwind -o /tmp/clang-musl-c-smoke; \
+    printf '%s\n' '#include <string>' 'int main() { return std::string(2, 120).size() != 2; }' \
+      | clang++ -x c++ - -static-libstdc++ -static-libgcc -static -o /tmp/clang-musl-cxx-smoke; \
+    /tmp/clang-musl-c-smoke; \
+    /tmp/clang-musl-cxx-smoke; \
+    rm /tmp/clang-musl-c-smoke /tmp/clang-musl-cxx-smoke
 
 WORKDIR /src
 COPY . .
@@ -90,7 +111,14 @@ RUN curl -fsSL --retry 5 \
     && install -m 0755 /tmp/bun-bootstrap/bun-linux-${BUN_ARCH}-musl/bun /usr/local/bin/bun \
     && rm -rf /tmp/bun-bootstrap.zip /tmp/bun-bootstrap
 
-RUN if [ "${BUN_CAPTURE_ONLY}" = "1" ]; then \
+# Build outputs and ccache entries are tied to the prebuilt compiler/config.
+# Version these mounts so changing LLVM cannot reuse stale objects from an
+# earlier toolchain; CCACHE_EXTRAFILES also covers clang++.cfg edits.
+RUN --mount=type=cache,id=bun-x86_84-static-musl-cargo-registry,target=/root/.cargo/registry \
+    --mount=type=cache,id=bun-x86_84-static-musl-cargo-git,target=/root/.cargo/git \
+    --mount=type=cache,id=bun-x86_84-static-musl-build-${LLVM_RELEASE_SHA}-${LLVM_TOOLCHAIN_REV},target=/src/build \
+    --mount=type=cache,id=bun-x86_84-static-musl-ccache-${LLVM_RELEASE_SHA}-${LLVM_TOOLCHAIN_REV},target=/src/cache \
+    if [ "${BUN_CAPTURE_ONLY}" = "1" ]; then \
       bun run build:release --lto=${BUN_LTO} --configure-only \
       && set -- $(ninja -C build/release -t query bun-profile | sed -n '/^  input: link$/,/^  outputs:/p' | sed -n 's/^    //p') \
       && ninja -C build/release "$@"; \
@@ -103,20 +131,21 @@ RUN if [ "${BUN_CAPTURE_ONLY}" = "1" ]; then \
       && file build/release/bun | grep -q 'statically linked' \
       && test -z "$(readelf -l build/release/bun | grep 'INTERP' || true)" \
       && test -z "$(readelf -d build/release/bun | grep 'NEEDED' || true)" \
-      && grep -q 'obj/vendor/mimalloc/src/static.c.o' build/release/bun-profile.linker-map \
+      && grep -Eq 'obj/vendor/mimalloc/src/.*static.c.o' build/release/bun-profile.linker-map \
       && llvm-nm -a build/release/bun-profile | grep -Eq '[[:space:]]mi_(malloc|calloc|realloc|free)([[:space:]]|$)' \
       && ! ldd build/release/bun 2>&1 \
       && build/release/bun --version \
       && test "$(build/release/bun -e 'console.log("ok")')" = "ok" \
       && test "$(build/release/bun -e 'console.log(40 + 2)')" = "42" \
-      && build/release/bun -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing"); const d = heapStats({ dump: true }); if (!d.mimallocDump?.heaps?.some(h => h.seq === 0 && h.pages?.length)) throw new Error("mimalloc heap dump missing");'; \
+      && build/release/bun -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing"); const d = heapStats({ dump: true }); if (!d.mimallocDump?.heaps?.some(h => h.seq === 0 && h.pages?.length)) throw new Error("mimalloc heap dump missing");' \
+      && cp build/release/bun /tmp/bun-release; \
     fi
 
 FROM build AS capture
 
 FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
 
-COPY --from=build /src/build/release/bun /usr/local/bin/bun
+COPY --from=build /tmp/bun-release /usr/local/bin/bun
 
 RUN /usr/local/bin/bun --version \
     && ! apk info -e | grep -Eq '^(gcompat|glibc|libgcc|libstdc\\+\\+)' \

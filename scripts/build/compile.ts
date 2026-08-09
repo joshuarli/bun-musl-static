@@ -167,10 +167,14 @@ export function registerCompileRules(n: Ninja, cfg: Config): void {
   // so the fixup runs after the link succeeds and the declared output is
   // already the final, patched, re-signed artifact. See shims.ts.
   const wrap = `${cfg.jsRuntime} ${q(streamPath)} link --console`;
+  // Native Darwin LTO can select rustc's newer ld64.lld when its LLVM is ahead
+  // of clang's. `-B` makes clang's `-fuse-ld=lld` resolve that exact linker;
+  // without it the driver silently falls back to the system/Homebrew lld.
+  const darwinLld = cfg.darwin && cfg.ld !== "" ? `-fuse-ld=lld ${q(`-B${dirname(cfg.ld)}`)}` : "";
   n.rule("link", {
     command: cfg.windows
       ? `${wrap} ${cxx} /nologo -fuse-ld=lld ${q(`/clang:-B${dirname(cfg.ld)}`)} @$out.rsp /Fe$out /link $ldflags`
-      : `${wrap} ${cxx} @$out.rsp $ldflags -o $out${elfDebugCompressPostlinkCommand(cfg)}${machoPostlinkCommand(cfg)}`,
+      : `${wrap} ${cxx} ${darwinLld} @$out.rsp $ldflags -o $out${elfDebugCompressPostlinkCommand(cfg)}${machoPostlinkCommand(cfg)}`,
     description: "link $out",
     rspfile: "$out.rsp",
     rspfile_content: "$in_newline",

@@ -39,13 +39,15 @@ const cfg = (abi: "gnu" | "musl") =>
   }) as Config;
 
 test("musl links the libc and C++ runtime statically", () => {
-  const muslFlags = computeFlags(cfg("musl")).ldflags;
+  const flags = computeFlags(cfg("musl"));
+  const muslFlags = flags.ldflags;
 
   expect(muslFlags).toContain("-static");
   expect(muslFlags).toContain("-static-libstdc++");
   expect(muslFlags).toContain("-static-libgcc");
   expect(muslFlags).not.toContain("-lstdc++");
   expect(muslFlags).not.toContain("-lgcc");
+  expect(flags.cxxflags).toContain("-stdlib=libstdc++");
 });
 
 test("gnu keeps its existing static C++ runtime contract", () => {

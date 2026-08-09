@@ -246,14 +246,6 @@ unstripped profile's linker map and `mi_*` symbols, then queries
 heaps. The stripped artifact is run again in the final Alpine stage, where no
 libstdc++/libgcc runtime packages are installed.
 
-The ARM64-native recipe is [Dockerfile.arm64-static-musl](/Dockerfile.arm64-static-musl).
-Build it on an ARM64 runner with:
-
-```sh
-docker build --platform=linux/arm64 \
-  -f Dockerfile.arm64-static-musl .
-```
-
 The static executable still uses kernel-provided interfaces and a container's
 normal virtual mounts such as `/dev` and `/proc`; a literal empty `chroot` is
 not equivalent to a container and can fail when `/dev/urandom` is absent.

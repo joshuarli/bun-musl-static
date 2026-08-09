@@ -1,36 +1,66 @@
-.PHONY: bun arm64-static-musl-llvm22-alpine-native
+BUN_LTO ?= on
+DOCKER_BUILD ?= docker buildx build
+DOCKER_BUILD_CACHE_ARGS ?=
 
-BUN_LLVM_VERSION ?= 22.1.8
+.PHONY: macos-aarch64 arm64-static-musl x86_84-static-musl
 
-bun:
-	@llvm_prefix="$$(brew --prefix llvm 2>/dev/null || true)"; \
+macos-aarch64:
+	@set -eu; \
+	llvm_prefix="$$(brew --prefix llvm 2>/dev/null || true)"; \
 	 lld_prefix="$$(brew --prefix lld 2>/dev/null || true)"; \
 	 if test -n "$$llvm_prefix"; then \
 		PATH="$$llvm_prefix/bin:$$lld_prefix/bin:$$PATH" \
-		BUN_LLVM_VERSION="$(BUN_LLVM_VERSION)" \
 		bun run build:release:lto; \
 	 else \
 		bun run build:release:lto; \
-	 fi
-
-# Vectorization warnings are from SIMDeâs `simde_vcvt_high_f32_f64` fallback loops. The target uses `armv8-a+crc` without FP16, selecting scalar fallback code marked with `#pragma clang loop vectorize(enable)`. LLVM 22 cannot vectorize those tiny private-vector conversion loops and reports warnings during ThinLTO; they are harmless optimization misses, not build failures.
-
-arm64-static-musl-llvm22-alpine-native:
-	@set -eu; \
-	image='bun-arm64-static-musl-llvm22-alpine-native:local'; \
-	container="bun-arm64-static-musl-llvm22-alpine-native-$$$$"; \
+	 fi; \
 	mkdir -p dist; \
-	docker build \
+	cp build/release-lto/bun dist/bun; \
+	test -s dist/bun; \
+	echo 'Wrote dist/bun'
+
+arm64-static-musl:
+	@set -eu; \
+	image='bun-arm64-static-musl:local'; \
+	container="bun-arm64-static-musl-$$$$"; \
+	mkdir -p dist; \
+	$(DOCKER_BUILD) $(DOCKER_BUILD_CACHE_ARGS) --load --progress=plain \
 		--platform=linux/arm64 \
 		--build-arg LLVM_ARCH=aarch64 \
 		--build-arg APK_ARCH=aarch64 \
 		--build-arg BUN_ARCH=aarch64 \
+		--build-arg BUN_LTO=$(BUN_LTO) \
+		--build-arg BUN_GIT_SHA="$$(git rev-parse HEAD)" \
 		--build-arg BUN_BOOTSTRAP_SHA256=5385e978107ce4934298d8d6afe9bfbb898683f6cc23e6753a0da60bc60c5b81 \
-		--file Dockerfile.arm64-static-musl-llvm22-alpine-native \
+		--file Dockerfile.arm64-static-musl \
 		--tag "$$image" \
 		.; \
 	docker create --platform=linux/arm64 --name "$$container" "$$image" >/dev/null; \
 	trap 'docker rm "$$container" >/dev/null 2>&1 || true' EXIT INT TERM; \
 	docker cp "$$container:/usr/local/bin/bun" dist/bun; \
 	test -s dist/bun; \
+	docker run --rm --platform=linux/arm64 "$$image" --version; \
+	echo 'Wrote dist/bun'
+
+x86_84-static-musl:
+	@set -eu; \
+	image='bun-x86_84-static-musl:local'; \
+	container="bun-x86_84-static-musl-$$$$"; \
+	mkdir -p dist; \
+	$(DOCKER_BUILD) $(DOCKER_BUILD_CACHE_ARGS) --load --progress=plain \
+		--platform=linux/amd64 \
+		--build-arg LLVM_ARCH=x86_64 \
+		--build-arg APK_ARCH=x86_64 \
+		--build-arg BUN_ARCH=x64 \
+		--build-arg BUN_LTO=$(BUN_LTO) \
+		--build-arg BUN_GIT_SHA="$$(git rev-parse HEAD)" \
+		--build-arg BUN_BOOTSTRAP_SHA256=5b91a48f0b00df9fd2da8bff1a795d2659d842da966432969203f25da19d1c74 \
+		--file Dockerfile.x86_84-static-musl \
+		--tag "$$image" \
+		.; \
+	docker create --platform=linux/amd64 --name "$$container" "$$image" >/dev/null; \
+	trap 'docker rm "$$container" >/dev/null 2>&1 || true' EXIT INT TERM; \
+	docker cp "$$container:/usr/local/bin/bun" dist/bun; \
+	test -s dist/bun; \
+	docker run --rm --platform=linux/amd64 "$$image" --version; \
 	echo 'Wrote dist/bun'

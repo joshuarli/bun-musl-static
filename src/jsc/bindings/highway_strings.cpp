@@ -2247,9 +2247,10 @@ template size_t MemMemTwoWayFallback<uint16_t>(const uint16_t*, size_t, const ui
 // The extern "C" only affects linkage (for C callers), not namespace resolution.
 extern "C" {
 
-void* highway_memmem(const uint8_t* haystack, size_t haystack_len, const uint8_t* needle, size_t needle_len)
+void* highway_memmem(const void* haystack, size_t haystack_len, const void* needle, size_t needle_len)
 {
-    return HWY_DYNAMIC_DISPATCH(MemMemImpl)(haystack, haystack_len, needle, needle_len);
+    return HWY_DYNAMIC_DISPATCH(MemMemImpl)(static_cast<const uint8_t*>(haystack), haystack_len,
+        static_cast<const uint8_t*>(needle), needle_len);
 }
 
 size_t highway_memrmem(const uint8_t* haystack, size_t haystack_len, const uint8_t* needle, size_t needle_len)

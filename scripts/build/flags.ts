@@ -95,6 +95,15 @@ export const globalFlags: Flag[] = [
     desc: "Cross-compile sysroot (target libc headers + libs)",
   },
   {
+    // The musl WebKit prebuilts use Alpine's libstdc++ ABI. Keep the choice
+    // explicit on the command line because compiler wrapper config files and
+    // host include-path environment can otherwise inject libc++ headers.
+    flag: "-stdlib=libstdc++",
+    when: c => c.linux && c.abi === "musl",
+    lang: "cxx",
+    desc: "Linux musl: use Alpine's libstdc++ ABI for WebKit compatibility",
+  },
+  {
     // Windows cross-compile: clang-cl can't read the VS dev shell's INCLUDE
     // env on a non-Windows host. /winsysroot points it at an xwin-style
     // splat laid out like a VS install (VC/Tools/MSVC + Windows Kits/10),
@@ -1031,11 +1040,11 @@ export const linkerFlags: Flag[] = [
   },
   {
     // -ld_new selects Apple's new linker — only meaningful (and only
-    // understood) when Apple's ld driver does the link. ld64.lld (the
-    // cross-link path) parses it as `-l d_new` and fails.
+    // understood) when Apple's ld driver does the link. ld64.lld parses it
+    // as `-l d_new` and fails.
     flag: "-Wl,-ld_new",
-    when: c => c.darwin && c.crossTarget === undefined,
-    desc: "Use new Apple linker (native darwin links only)",
+    when: c => c.darwin && c.ld === "",
+    desc: "Use new Apple linker when ld64.lld is not selected",
   },
   {
     // Cross-link from a non-darwin host: same pattern as Android/FreeBSD —

@@ -2294,11 +2294,12 @@ pub(crate) fn print_version_and_exit() -> ! {
     // The version string is plain ASCII (no `<tag>` markup), so bypass
     // `Output::pretty(format_args!(..))` — that path renders the `Arguments`
     // into a heap `String`, then runs the runtime `<tag>` rewriter into a
-    // second `Vec<u8>`, all to print a ~10-byte constant. Write the bytes
-    // straight to the buffered stdout writer instead. One `write_all` (the
-    // `\n` is baked into the constant) → one syscall.
+    // second `Vec<u8>`, all to print a ~20-byte constant. Write the bytes
+    // straight to the buffered stdout writer instead (two `write_all`s → two
+    // syscalls).
     let w = Output::writer();
-    let _ = w.write_all(Global::package_json_version_nl.as_bytes());
+    let _ = w.write_all(Global::package_json_version_with_revision.as_bytes());
+    let _ = w.write_all(b"\n");
     Output::flush();
     Global::exit(0);
 }
