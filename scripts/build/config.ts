@@ -244,9 +244,9 @@ export interface Config {
   /** llvm-ranlib. undefined on windows (llvm-lib indexes itself). */
   ranlib: string | undefined;
   /**
-   * ld.lld on linux, lld-link on windows, ld64.lld when cross-compiling for
-   * darwin from a non-darwin host. May be empty on native darwin (clang
-   * invokes the system linker).
+   * ld.lld on linux, lld-link on windows, and ld64.lld for Darwin links that
+   * need LLVM's Mach-O linker. Empty on native Darwin when clang invokes
+   * Apple's linker directly.
    */
   ld: string;
   strip: string;
@@ -794,7 +794,7 @@ function resolveBase(partial: PartialConfig, host: Host, os: OS, arch: Arch, js:
   // Windows cross: force off. The host clang doesn't ship the windows
   // clang_rt.asan runtime libs, so the link would fail.
   const asan =
-    abi === "android" || freebsd || darwinCross || (windows && host.os !== "windows")
+    abi === "android" || abi === "musl" || freebsd || darwinCross || (windows && host.os !== "windows")
       ? false
       : (partial.asan ?? asanDefault);
 

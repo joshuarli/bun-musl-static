@@ -51,6 +51,7 @@ static JSC::JSSourceCode* createObjectModuleSourceCodeForJSON(GlobalObject* glob
         object->getPropertyNames(globalObject, properties, DontEnumPropertiesMode::Exclude);
         RETURN_IF_EXCEPTION(scope, void());
 
+
         exportNames.append(vm.propertyNames->defaultKeyword);
         exportValues.append(object);
 
