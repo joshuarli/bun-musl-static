@@ -77,8 +77,8 @@ export const workarounds: Workaround[] = [
       // https://github.com/llvm/llvm-project/pull/188913 — lower this
       // threshold to the exact 22.1.x once it lands. Apple clang is
       // already excluded: resolveLlvmToolchain only accepts Homebrew
-      // llvm (LLVM_VERSION_RANGE is >=21 <23), so cfg.clangVersion is
-      // always LLVM clang's version here.
+      // LLVM (the macOS range is >=21.1.0 <23.0.0), so cfg.clangVersion
+      // is always LLVM clang's version here.
       const FIXED_IN_LLVM = "22.1.4";
       return cfg.clangVersion !== undefined && satisfiesRange(cfg.clangVersion, `>=${FIXED_IN_LLVM}`);
     },
@@ -107,27 +107,6 @@ export const workarounds: Workaround[] = [
       `Delete scripts/build/rust-lto-fix-cli.ts, the rust_lto_fix rule and rustLtoLinkInputs() in ` +
       `rust.ts, unwrap its call sites in bun.ts, drop "llvm-tools" from rust-toolchain.toml's ` +
       `components, and delete this entry.`,
-  },
-  {
-    id: "rust-lld-for-crosslang-lto",
-    issue: "https://rustc-dev-guide.rust-lang.org/backend/updating-llvm.html",
-    description:
-      "rustc's bundled LLVM is newer than clang's, so clang's ld.lld can't read " +
-      "-Clinker-plugin-lto bitcode (forward-compatible only). Link with rust-lld instead " +
-      "(and compress ELF debug sections post-link via llvm-objcopy, since rust-lld lacks zlib).",
-    applies: cfg => cfg.crossLangLto && cfg.rustLlvmVersion !== undefined && cfg.clangVersion !== undefined,
-    expectedToBeFixed: cfg => {
-      // Obsolete once clang's LLVM major catches up to (or passes) rustc's —
-      // at that point clang's own ld.lld reads rustc's bitcode and the
-      // rust-lld swap in resolveConfig() never fires.
-      const clangMajor = Number(cfg.clangVersion!.split(".")[0]);
-      const rustMajor = Number(cfg.rustLlvmVersion!.split(".")[0]);
-      return clangMajor >= rustMajor;
-    },
-    cleanup:
-      `Delete the rust-lld swap block in resolveConfig() (config.ts), findRustLld() and its call ` +
-      `in resolveLlvmToolchain() (tools.ts), the rustLld/rustLlvmVersion fields on Toolchain/Config, ` +
-      `and this entry.`,
   },
   {
     id: "darwin-cross-cpu-model",

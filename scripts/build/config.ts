@@ -221,9 +221,9 @@ export interface Config {
   /** llvm-ranlib. undefined on windows (llvm-lib indexes itself). */
   ranlib: string | undefined;
   /**
-   * ld.lld on linux, lld-link on windows, ld64.lld when cross-compiling for
-   * darwin from a non-darwin host. May be empty on native darwin (clang
-   * invokes the system linker).
+   * ld.lld on linux, lld-link on windows, and ld64.lld for Darwin links that
+   * need LLVM's Mach-O linker. Empty on native Darwin when clang invokes
+   * Apple's linker directly.
    */
   ld: string;
   /**
@@ -771,7 +771,12 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
   // ─── Features ───
   // Each is resolved exactly once here.
 
-  // ASAN: default on for debug builds on arm64 macOS or linux
+  // ASAN: default on for debug builds on arm64 macOS or linux. Full static
+  // musl links cannot use Rust's ASAN runtime: rustc rejects sanitizer builds
+  // with statically linked libc (`-C target-feature=-crt-static` would make
+  // the debug graph differ from the static artifact we are testing). Keep
+  // musl debug builds assertion-enabled but unsanitized, like Android and
+  // FreeBSD's cross builds.
   const asanDefault = debug && ((darwin && arm64) || linux);
   // Android: force off. NDK ASAN deployment needs wrap.sh + runtime .so
   // shipping alongside the binary; UBSan likewise. Not worth the matrix.
@@ -782,7 +787,7 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
   // Windows cross: force off. The host clang doesn't ship the windows
   // clang_rt.asan runtime libs, so the link would fail.
   const asan =
-    abi === "android" || freebsd || darwinCross || (windows && host.os !== "windows")
+    abi === "android" || abi === "musl" || freebsd || darwinCross || (windows && host.os !== "windows")
       ? false
       : (partial.asan ?? asanDefault);
 

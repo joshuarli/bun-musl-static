@@ -24,6 +24,7 @@
 #include <optional>
 #include <unordered_set>
 #include <variant>
+#include <vector>
 
 extern "C" void napi_internal_register_cleanup_zig(napi_env env);
 extern "C" void napi_internal_threadsafe_function_env_teardown(void* tsfn);
