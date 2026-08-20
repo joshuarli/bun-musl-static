@@ -1035,7 +1035,7 @@ install_bun() {
 	esac
 
 	unzip="$(require unzip)"
-	bun_download_url="https://pub-5e11e972747a44bf9aaf9394f185a982.r2.dev/releases/bun-v$(bun_version_exact)/$bun_triplet.zip"
+	bun_download_url="https://github.com/oven-sh/bun/releases/download/bun-v$(bun_version_exact)/$bun_triplet.zip"
 	bun_zip="$(download_file "$bun_download_url")"
 	bun_tmpdir="$(dirname "$bun_zip")"
 	execute "$unzip" -o "$bun_zip" -d "$bun_tmpdir"

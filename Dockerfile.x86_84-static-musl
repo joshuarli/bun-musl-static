@@ -8,11 +8,11 @@ ARG LLVM_SHA256=36647cca0bf57d206a6ce757d07a9d8489ef6ccf283a2cc7f740d1cba99a088b
 ARG LLVM_TOOLCHAIN_REV=libstdcxx-static-4
 ARG APK_ARCH=x86_64
 ARG BUN_ARCH=x64
-ARG BUN_BOOTSTRAP_VERSION=1.3.13
-ARG BUN_BOOTSTRAP_SHA256=5b91a48f0b00df9fd2da8bff1a795d2659d842da966432969203f25da19d1c74
+ARG BUN_BOOTSTRAP_VERSION=1.4.0
+ARG BUN_BOOTSTRAP_SHA256=83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a
 ARG BUN_LTO=on
 ARG BUN_CAPTURE_ONLY=0
-ARG RUST_NIGHTLY=nightly-2026-07-20
+ARG RUST_NIGHTLY=nightly-2026-07-24
 ARG BUN_GIT_SHA=0000000000000000000000000000000000000000
 
 RUN apk add --no-cache \
@@ -25,6 +25,7 @@ RUN apk add --no-cache \
     git \
     icu-dev \
     linux-headers \
+    nasm \
     ninja \
     perl \
     rustup \
@@ -104,7 +105,7 @@ RUN test "$(apk --print-arch)" = "${APK_ARCH}" \
     && rustup default "$RUST_NIGHTLY"
 
 RUN curl -fsSL --retry 5 \
-      "https://pub-5e11e972747a44bf9aaf9394f185a982.r2.dev/releases/bun-v${BUN_BOOTSTRAP_VERSION}/bun-linux-${BUN_ARCH}-musl.zip" \
+      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_BOOTSTRAP_VERSION}/bun-linux-${BUN_ARCH}-musl.zip" \
       -o /tmp/bun-bootstrap.zip \
     && echo "${BUN_BOOTSTRAP_SHA256}  /tmp/bun-bootstrap.zip" | sha256sum -c - \
     && unzip -q /tmp/bun-bootstrap.zip -d /tmp/bun-bootstrap \
