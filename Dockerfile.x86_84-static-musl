@@ -36,6 +36,10 @@ RUN curl -fL --retry 5 -o /tmp/llvm.tar.xz \
     && rm /tmp/llvm.tar.xz \
     && test -x /opt/llvm/bin/clang
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nasm \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN repo=https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
     && curl -fL --retry 5 -o /tmp/APKINDEX.tar.gz "$repo/aarch64/APKINDEX.tar.gz" \
     && ver=$(tar -xzOf /tmp/APKINDEX.tar.gz APKINDEX | awk '/^P:apk-tools-static$/{f=1} f&&/^V:/{print substr($0,3); exit}') \

@@ -27,33 +27,23 @@ jobs:
             make_target: x86_84-static-musl
             dockerfile: Dockerfile.x86_84-static-musl
             artifact_name: bun-linux-x86_64-musl-static
-          - name: macos-aarch64
-            arch: aarch64
-            platform: macos
-            runner: macos-26
-            make_target: macos-aarch64
-            artifact_name: bun-macos-aarch64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
 
     steps:
-      - name: Install macOS linker
-        if: matrix.platform == 'macos'
+      - name: Free runner disk
         shell: bash
         run: |
           set -euo pipefail
-
-          brew install lld
-          lld_bin_dir="$(brew --prefix lld)/bin"
-          echo "$lld_bin_dir" >> "$GITHUB_PATH"
-          export PATH="$lld_bin_dir:$PATH"
-          ld64.lld --version
-
-      - name: Install Bun
-        if: matrix.platform == 'macos'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.13"
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/lib/jvm \
+            /opt/hostedtoolcache \
+            "$AGENT_TOOLSDIRECTORY"
+          df -h /
 
       - name: Fetch source
         shell: bash
@@ -70,14 +60,12 @@ jobs:
           git -C "$source_dir" checkout --detach FETCH_HEAD
 
       - name: Set up Docker Buildx
-        if: matrix.platform != 'macos'
         id: buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Cache Linux BuildKit mounts
-        if: matrix.platform != 'macos'
         id: buildkit-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/bun-musl-build/buildkit-cache
           key: bun-musl-buildkit-${{ matrix.arch }}-${{ github.sha }}
@@ -85,8 +73,7 @@ jobs:
             bun-musl-buildkit-${{ matrix.arch }}-
 
       - name: Restore Linux BuildKit mounts
-        if: matrix.platform != 'macos'
-        uses: reproducible-containers/buildkit-cache-dance@v3
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3
         with:
           builder: ${{ steps.buildx.outputs.name }}
           cache-dir: ${{ runner.temp }}/bun-musl-build/buildkit-cache
@@ -105,44 +92,34 @@ jobs:
           mkdir -p "$artifact_dir" "$archive_dir"
 
           cd "$work_dir/source"
-          if [ "${{ matrix.platform }}" = macos ]; then
-            make "${{ matrix.make_target }}" BUN_LTO=on
-          else
-            DOCKER_BUILD="docker buildx build --builder ${{ steps.buildx.outputs.name }}" \
-            DOCKER_BUILD_CACHE_ARGS='--cache-from type=gha,scope=bun-musl-${{ matrix.arch }} --cache-to type=gha,mode=max,scope=bun-musl-${{ matrix.arch }}' \
-            make "${{ matrix.make_target }}" BUN_LTO=on
-          fi
+          DOCKER_BUILD="docker buildx build --builder ${{ steps.buildx.outputs.name }}" \
+          DOCKER_BUILD_CACHE_ARGS='--cache-from type=gha,scope=bun-musl-${{ matrix.arch }} --cache-to type=gha,mode=max,scope=bun-musl-${{ matrix.arch }}' \
+          make "${{ matrix.make_target }}" BUN_LTO=off
 
           artifact="$artifact_dir/$artifact_name"
           cp dist/bun "$artifact"
           test -x "$artifact"
           file "$artifact"
+          test -z "$(readelf -lW "$artifact" | awk '/INTERP/{print}')"
+          test -z "$(readelf -dW "$artifact" | awk '/NEEDED/{print}')"
 
-          if [ "${{ matrix.platform }}" != macos ]; then
-            test -z "$(readelf -lW "$artifact" | awk '/INTERP/{print}')"
-            test -z "$(readelf -dW "$artifact" | awk '/NEEDED/{print}')"
-
-            docker run --rm --platform="${{ matrix.platform }}" \
-              -v "$artifact:/tmp/bun:ro" \
-              alpine:edge sh -ec '
-                apk add --no-cache binutils file >/dev/null
-                file /tmp/bun
-                test -z "$(readelf -lW /tmp/bun | awk "/INTERP/{print}")"
-                test -z "$(readelf -dW /tmp/bun | awk "/NEEDED/{print}")"
-                /tmp/bun --version
-                test "$(/tmp/bun -e "console.log(40 + 2)")" = 42
-                /tmp/bun -e '\''const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing")'\''
-              '
-          else
-            "$artifact" --version
-            test "$("$artifact" -e 'console.log(40 + 2)')" = 42
-          fi
+          docker run --rm --platform="${{ matrix.platform }}" \
+            -v "$artifact:/tmp/bun:ro" \
+            alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 sh -ec '
+              apk add --no-cache binutils file >/dev/null
+              file /tmp/bun
+              test -z "$(readelf -lW /tmp/bun | awk "/INTERP/{print}")"
+              test -z "$(readelf -dW /tmp/bun | awk "/NEEDED/{print}")"
+              /tmp/bun --version
+              test "$(/tmp/bun -e "console.log(40 + 2)")" = 42
+              /tmp/bun -e '\''const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing")'\''
+            '
 
           zip -9 -j "$archive_dir/$artifact_name.zip" "$artifact"
           test -s "$archive_dir/$artifact_name.zip"
 
       - name: Upload ${{ matrix.name }} ZIP
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ runner.temp }}/bun-musl-build/archive/*.zip
@@ -152,11 +129,12 @@ jobs:
     name: Publish static artifacts
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -168,25 +146,38 @@ jobs:
           set -euo pipefail
 
           release_name="bun-${GITHUB_SHA}-static"
+          if gh release view "$release_name" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $release_name already exists" >&2
+            exit 1
+          fi
+
+          publish_dir="$RUNNER_TEMP/publish"
+          mkdir -p "$publish_dir"
           mapfile -d '' release_files < <(find artifacts -type f -name '*.zip' -print0 | sort -z)
-          test "${#release_files[@]}" -eq 3
+          test "${#release_files[@]}" -eq 2
           expected_assets=(
             bun-linux-aarch64-musl-static.zip
             bun-linux-x86_64-musl-static.zip
-            bun-macos-aarch64.zip
           )
           actual_assets=()
           for release_file in "${release_files[@]}"; do
             actual_assets+=("$(basename "$release_file")")
             unzip -tq "$release_file"
+            cp "$release_file" "$publish_dir/"
           done
           diff -u \
             <(printf '%s\n' "${expected_assets[@]}" | LC_ALL=C sort) \
             <(printf '%s\n' "${actual_assets[@]}" | LC_ALL=C sort)
+          (
+            cd "$publish_dir"
+            sha256sum ./*.zip | LC_ALL=C sort -k2 > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
           gh release create "$release_name" \
-            "${release_files[@]}" \
+            "$publish_dir"/*.zip \
+            "$publish_dir/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$release_name" \
-            --notes "Static Linux aarch64 and x86_64 musl plus macOS 26+ aarch64 Bun artifacts built from $GITHUB_SHA." \
+            --notes "Static Linux aarch64 and x86_64 musl Bun artifacts built from $GITHUB_SHA." \
             --prerelease
