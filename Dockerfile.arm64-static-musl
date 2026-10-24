@@ -38,10 +38,10 @@ RUN curl -fL --retry 5 -o /tmp/llvm.tar.xz \
     && test -x /opt/llvm/bin/clang
 
 RUN repo=https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
-    && curl -fL --retry 5 -o /tmp/APKINDEX.tar.gz "$repo/aarch64/APKINDEX.tar.gz" \
+    && curl -fL --retry 5 -o /tmp/APKINDEX.tar.gz "$repo/$APK_ARCH/APKINDEX.tar.gz" \
     && ver=$(tar -xzOf /tmp/APKINDEX.tar.gz APKINDEX | awk '/^P:apk-tools-static$/{f=1} f&&/^V:/{print substr($0,3); exit}') \
     && test -n "$ver" \
-    && curl -fL --retry 5 -o /tmp/apk-tools.apk "$repo/aarch64/apk-tools-static-${ver}.apk" \
+    && curl -fL --retry 5 -o /tmp/apk-tools.apk "$repo/$APK_ARCH/apk-tools-static-${ver}.apk" \
     && mkdir -p /tmp/apk-unpack \
     && tar -xzf /tmp/apk-tools.apk -C /tmp/apk-unpack sbin/apk.static \
     && /tmp/apk-unpack/sbin/apk.static --arch "$APK_ARCH" --root /opt/musl-sysroot --initdb \
