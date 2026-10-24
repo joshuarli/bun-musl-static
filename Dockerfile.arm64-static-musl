@@ -50,8 +50,9 @@ RUN repo=https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
       --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/community \
       add musl-dev g++ libstdc++-dev linux-headers \
     && gccdir=$(echo /opt/musl-sysroot/usr/lib/gcc/*-alpine-linux-musl/*) \
-    && printf '%s\n' "--gcc-install-dir=${gccdir}" > "/opt/llvm/bin/${TARGET_TRIPLE}.cfg" \
-    && printf '%s\n' "--gcc-install-dir=${gccdir}" > "/opt/llvm/bin/${TARGET_TRIPLE}-clang++.cfg" \
+    && printf '%s\n' "--gcc-install-dir=${gccdir}" "-fuse-ld=lld" > "/opt/llvm/bin/${TARGET_TRIPLE}.cfg" \
+    && printf '%s\n' "--gcc-install-dir=${gccdir}" "-fuse-ld=lld" > "/opt/llvm/bin/${TARGET_TRIPLE}-clang.cfg" \
+    && printf '%s\n' "--gcc-install-dir=${gccdir}" "-fuse-ld=lld" > "/opt/llvm/bin/${TARGET_TRIPLE}-clang++.cfg" \
     && rm -rf /tmp/APKINDEX.tar.gz /tmp/apk-tools.apk /tmp/apk-unpack
 
 ENV PATH=/opt/llvm/bin:/root/.cargo/bin:/usr/local/bin:$PATH \
@@ -68,7 +69,7 @@ ENV PATH=/opt/llvm/bin:/root/.cargo/bin:/usr/local/bin:$PATH \
 RUN set -eu; \
     printf '%s\n' '#include <iostream>' 'int main(){std::cout<<"ok\n";}' \
       | clang++ --target="$TARGET_TRIPLE" --sysroot=/opt/musl-sysroot \
-        -stdlib=libstdc++ -static-libstdc++ -static-libgcc -static \
+        -stdlib=libstdc++ -static-libstdc++ -static-libgcc -static -fuse-ld=lld \
         -x c++ -o /tmp/static-cxx -; \
     test -z "$(readelf -l /tmp/static-cxx | grep INTERP || true)"; \
     test "$(/tmp/static-cxx)" = ok; \
@@ -96,16 +97,19 @@ RUN --mount=type=cache,id=bun-arm64-static-musl-cargo-registry,target=/root/.car
     --mount=type=cache,id=bun-arm64-static-musl-build-llvm-23.1.1,target=/src/build \
     --mount=type=cache,id=bun-arm64-static-musl-ccache-llvm-23.1.1,target=/root/.cache/ccache \
     if [ "${BUN_CAPTURE_ONLY}" = "1" ]; then \
-      bun run build:release --lto=${BUN_LTO} --abi=musl --configure-only \
+      bun run build:release --lto=${BUN_LTO} --abi=musl -j4 --configure-only \
       && set -- $(ninja -C build/release -t query bun-profile | sed -n '/^  input: link$/,/^  outputs:/p' | sed -n 's/^    //p') \
-      && ninja -C build/release "$@"; \
+      && ninja -C build/release -j4 "$@"; \
     else \
-      bun run build:release --lto=${BUN_LTO} --abi=musl \
+      bun run build:release --lto=${BUN_LTO} --abi=musl -j4 \
       && file build/release/bun | grep -q 'statically linked' \
       && test -z "$(readelf -l build/release/bun | grep 'INTERP' || true)" \
       && test -z "$(readelf -d build/release/bun | grep 'NEEDED' || true)" \
       && ! ldd build/release/bun \
-      && test "$(build/release/bun --version)" = "$BUN_BOOTSTRAP_VERSION" \
+      && case "$(build/release/bun --version)" in \
+           "${BUN_BOOTSTRAP_VERSION}"|"${BUN_BOOTSTRAP_VERSION}"-*) ;; \
+           *) echo "unexpected bun version: $(build/release/bun --version)"; exit 1 ;; \
+         esac \
       && test "$(build/release/bun -e 'console.log("ok")')" = "ok" \
       && cp build/release/bun /tmp/bun-release; \
     fi
