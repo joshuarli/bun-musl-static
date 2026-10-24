@@ -31,7 +31,7 @@ arm64-static-musl:
 		--build-arg BUN_ARCH=aarch64 \
 		--build-arg BUN_LTO=$(BUN_LTO) \
 		--build-arg BUN_GIT_SHA="$$(git rev-parse HEAD)" \
-		--build-arg BUN_BOOTSTRAP_SHA256=576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473 \
+		--build-arg BUN_BOOTSTRAP_SHA256=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e \
 		--file Dockerfile.arm64-static-musl \
 		--tag "$$image" \
 		.; \
@@ -54,7 +54,7 @@ x86_84-static-musl:
 		--build-arg BUN_ARCH=x64 \
 		--build-arg BUN_LTO=$(BUN_LTO) \
 		--build-arg BUN_GIT_SHA="$$(git rev-parse HEAD)" \
-		--build-arg BUN_BOOTSTRAP_SHA256=83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a \
+		--build-arg BUN_BOOTSTRAP_SHA256=bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c \
 		--file Dockerfile.x86_84-static-musl \
 		--tag "$$image" \
 		.; \

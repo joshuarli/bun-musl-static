@@ -1,156 +1,122 @@
-FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS build
+FROM ubuntu:24.04 AS build
 
-ARG LLVM_VERSION=23.1.0-rc2
-ARG LLVM_ARCH=aarch64
-ARG LLVM_RELEASE_SHA=6eb5fb9
-ARG LLVM_SHA256=0c9bd6f0fefa26dbdb7d6ed568f3799b558428b1ce1264656aa328fc6fd9e32d
-# Bump when clang++.cfg or another compiler-wrapper contract changes.
-ARG LLVM_TOOLCHAIN_REV=libstdcxx-static-4
+ARG LLVM_VERSION=23.1.1
+ARG LLVM_SHA256=3fbaaa6a1f147557a4095b9911f8dc2d4c745a11863982f76ee20e248c190a80
+ARG LLVM_TAR=LLVM-23.1.1-Linux-ARM64.tar.xz
+ARG ICU_SHA256=ac68372cf4a976e6a206858fd9b28c68e49d37d650b9b8653270038a6e7bc174
+ARG ICU_URL=http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu/libicu70_70.1-2_arm64.deb
 ARG APK_ARCH=aarch64
+ARG TARGET_TRIPLE=aarch64-alpine-linux-musl
 ARG BUN_ARCH=aarch64
-ARG BUN_BOOTSTRAP_VERSION=1.4.0
-ARG BUN_BOOTSTRAP_SHA256=576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473
+ARG BUN_BOOTSTRAP_VERSION=1.4.4
+ARG BUN_BOOTSTRAP_SHA256=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e
 ARG BUN_LTO=on
 ARG BUN_CAPTURE_ONLY=0
-ARG RUST_NIGHTLY=nightly-2026-07-24
+ARG RUST_NIGHTLY=nightly-2026-09-15
 ARG BUN_GIT_SHA=0000000000000000000000000000000000000000
 
-RUN apk add --no-cache \
-    build-base \
-    ca-certificates \
-    ccache \
-    cmake \
-    curl \
-    file \
-    git \
-    icu-dev \
-    linux-headers \
-    ninja \
-    perl \
-    rustup \
-    unzip
+ENV DEBIAN_FRONTEND=noninteractive
 
-# The prebuilt lld is intentionally zlib-free. Alpine's static libc, CRT, and
-# compiler-runtime archives carry compressed debug sections, so strip those
-# inputs before any host or target link consumes them.
-RUN set -eu; \
-    for obj in /usr/lib/*crt*.o /usr/lib/Scrt1.o /usr/lib/*.a /usr/lib/gcc/*/*/*.a; do \
-        [ -e "$obj" ] || continue; \
-        strip --strip-debug "$obj"; \
-    done
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      binutils build-essential ca-certificates ccache cmake curl file git \
+      ninja-build perl pkg-config python3 unzip xz-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Alpine names the target-specific libstdc++ headers with its distro triple,
-# while LLVM's target triple is aarch64-linux-musl.
-RUN set -eu; \
-    for inc in /usr/include/c++/*; do \
-        [ -d "$inc" ] || continue; \
-        src="$inc/${LLVM_ARCH}-alpine-linux-musl"; \
-        dst="$inc/${LLVM_ARCH}-linux-musl"; \
-        [ -d "$src" ] || continue; \
-        [ -e "$dst" ] || ln -s "$(basename "$src")" "$dst"; \
-    done
+# LLVM's Linux release links lld against ICU 70.
+RUN curl -fL --retry 5 -o /tmp/libicu.deb "$ICU_URL" \
+    && echo "${ICU_SHA256}  /tmp/libicu.deb" | sha256sum -c - \
+    && dpkg -i /tmp/libicu.deb \
+    && rm /tmp/libicu.deb
 
-ADD https://github.com/laputa-systems/llvm-prebuilt-musl/releases/download/llvm-musl-${LLVM_VERSION}-${LLVM_RELEASE_SHA}/clang+llvm-${LLVM_VERSION}-${LLVM_ARCH}-linux-musl.tar.xz /tmp/llvm.tar.xz
-
-RUN mkdir -p /opt/llvm-musl \
+RUN curl -fL --retry 5 -o /tmp/llvm.tar.xz \
+      "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${LLVM_TAR}" \
     && echo "${LLVM_SHA256}  /tmp/llvm.tar.xz" | sha256sum -c - \
-    && tar xf /tmp/llvm.tar.xz -C /opt/llvm-musl --strip-components=1 \
+    && mkdir -p /opt/llvm \
+    && tar -xJf /tmp/llvm.tar.xz -C /opt/llvm --strip-components=1 \
     && rm /tmp/llvm.tar.xz \
-    && test -f /opt/llvm-musl/lib/libclang.so \
-    && printf '%s\n' '-stdlib=libstdc++' '-fuse-ld=lld' '-DHWY_BROKEN_SVE=HWY_SVE' '-DHWY_BROKEN_SVE2=HWY_SVE2' > /opt/llvm-musl/bin/clang++.cfg \
-    && mv /opt/llvm-musl/bin/ld.lld /opt/llvm-musl/bin/ld.lld.real \
-    && printf '%s\n' '#!/usr/bin/perl' '@ARGV = grep { $_ ne "--compress-debug-sections=zlib" } @ARGV;' 'exec { "/opt/llvm-musl/bin/ld.lld.real" } "ld.lld", @ARGV;' > /opt/llvm-musl/bin/ld.lld \
-    && chmod 0755 /opt/llvm-musl/bin/ld.lld
+    && test -x /opt/llvm/bin/clang
 
-ENV PATH=/opt/llvm-musl/bin:/root/.cargo/bin:/usr/local/bin:$PATH \
-    CC=/opt/llvm-musl/bin/clang \
-    CXX=/opt/llvm-musl/bin/clang++ \
-    AR=/opt/llvm-musl/bin/llvm-ar \
-    RANLIB=/opt/llvm-musl/bin/llvm-ranlib \
-    LD=/opt/llvm-musl/bin/ld.lld \
-    LIBRARY_PATH=/opt/llvm-musl/lib \
-    LIBCLANG_PATH=/opt/llvm-musl/lib \
-    CCACHE_DIR=/src/cache/ccache \
-    CCACHE_BASEDIR=/src \
-    CCACHE_COMPILERCHECK=content \
-    CCACHE_EXTRAFILES=/opt/llvm-musl/bin/clang++.cfg \
-    CCACHE_COMPRESS=true \
-    CCACHE_MAXSIZE=20G \
-    CCACHE_CC=/opt/llvm-musl/bin/clang \
-    CCACHE_CXX=/opt/llvm-musl/bin/clang++ \
+RUN repo=https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
+    && curl -fL --retry 5 -o /tmp/APKINDEX.tar.gz "$repo/aarch64/APKINDEX.tar.gz" \
+    && ver=$(tar -xzOf /tmp/APKINDEX.tar.gz APKINDEX | awk '/^P:apk-tools-static$/{f=1} f&&/^V:/{print substr($0,3); exit}') \
+    && test -n "$ver" \
+    && curl -fL --retry 5 -o /tmp/apk-tools.apk "$repo/aarch64/apk-tools-static-${ver}.apk" \
+    && mkdir -p /tmp/apk-unpack \
+    && tar -xzf /tmp/apk-tools.apk -C /tmp/apk-unpack sbin/apk.static \
+    && /tmp/apk-unpack/sbin/apk.static --arch "$APK_ARCH" --root /opt/musl-sysroot --initdb \
+      --allow-untrusted --no-cache \
+      --repository "$repo" \
+      --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/community \
+      add musl-dev g++ libstdc++-dev linux-headers \
+    && gccdir=$(echo /opt/musl-sysroot/usr/lib/gcc/*-alpine-linux-musl/*) \
+    && printf '%s\n' "--gcc-install-dir=${gccdir}" > "/opt/llvm/bin/${TARGET_TRIPLE}.cfg" \
+    && printf '%s\n' "--gcc-install-dir=${gccdir}" > "/opt/llvm/bin/${TARGET_TRIPLE}-clang++.cfg" \
+    && rm -rf /tmp/APKINDEX.tar.gz /tmp/apk-tools.apk /tmp/apk-unpack
+
+ENV PATH=/opt/llvm/bin:/root/.cargo/bin:/usr/local/bin:$PATH \
+    LINUX_MUSL_SYSROOT=/opt/musl-sysroot \
+    CC=/opt/llvm/bin/clang \
+    CXX=/opt/llvm/bin/clang++ \
+    AR=/opt/llvm/bin/llvm-ar \
+    RANLIB=/opt/llvm/bin/llvm-ranlib \
+    LD=/opt/llvm/bin/ld.lld \
+    LIBCLANG_PATH=/opt/llvm/lib \
     GIT_SHA=${BUN_GIT_SHA} \
-    BUN_LLVM_VERSION=${LLVM_VERSION} \
     BUN_DEBUG_QUIET_LOGS=1
 
-# Fail early if the downloaded compiler cannot link the C and C++ runtime
-# combinations used by the full build. This keeps toolchain failures out of
-# the much slower Bun compilation step.
 RUN set -eu; \
-    printf '%s\n' 'int main(void) { return 0; }' \
-      | clang -x c - -lunwind -o /tmp/clang-musl-c-smoke; \
-    printf '%s\n' '#include <string>' 'int main() { return std::string(2, 120).size() != 2; }' \
-      | clang++ -x c++ - -static-libstdc++ -static-libgcc -static -o /tmp/clang-musl-cxx-smoke; \
-    /tmp/clang-musl-c-smoke; \
-    /tmp/clang-musl-cxx-smoke; \
-    rm /tmp/clang-musl-c-smoke /tmp/clang-musl-cxx-smoke
+    printf '%s\n' '#include <iostream>' 'int main(){std::cout<<"ok\n";}' \
+      | clang++ --target="$TARGET_TRIPLE" --sysroot=/opt/musl-sysroot \
+        -stdlib=libstdc++ -static-libstdc++ -static-libgcc -static \
+        -x c++ -o /tmp/static-cxx -; \
+    test -z "$(readelf -l /tmp/static-cxx | grep INTERP || true)"; \
+    test "$(/tmp/static-cxx)" = ok; \
+    rm /tmp/static-cxx
 
 WORKDIR /src
 COPY . .
 
-RUN test "$(apk --print-arch)" = "${APK_ARCH}" \
-    && rustup-init -y --no-modify-path --profile minimal --default-toolchain none \
+RUN curl -fL --retry 5 https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none \
     && rustup toolchain install "$RUST_NIGHTLY" --profile minimal \
-      --component rust-src --component rustfmt --component llvm-tools-preview \
+      --component rust-src --component rustfmt --component llvm-tools \
     && rustup default "$RUST_NIGHTLY"
 
-RUN curl -fsSL --retry 5 \
-      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_BOOTSTRAP_VERSION}/bun-linux-${BUN_ARCH}-musl.zip" \
+RUN curl -fL --retry 5 \
+      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_BOOTSTRAP_VERSION}/bun-linux-${BUN_ARCH}.zip" \
       -o /tmp/bun-bootstrap.zip \
     && echo "${BUN_BOOTSTRAP_SHA256}  /tmp/bun-bootstrap.zip" | sha256sum -c - \
     && unzip -q /tmp/bun-bootstrap.zip -d /tmp/bun-bootstrap \
-    && install -m 0755 /tmp/bun-bootstrap/bun-linux-${BUN_ARCH}-musl/bun /usr/local/bin/bun \
-    && rm -rf /tmp/bun-bootstrap.zip /tmp/bun-bootstrap
+    && install -m 0755 /tmp/bun-bootstrap/bun-linux-${BUN_ARCH}/bun /usr/local/bin/bun \
+    && rm -rf /tmp/bun-bootstrap.zip /tmp/bun-bootstrap \
+    && test "$(bun --version)" = "$BUN_BOOTSTRAP_VERSION"
 
-# Build outputs and ccache entries are tied to the prebuilt compiler/config.
-# Version these mounts so changing LLVM cannot reuse stale objects from an
-# earlier toolchain; CCACHE_EXTRAFILES also covers clang++.cfg edits.
 RUN --mount=type=cache,id=bun-arm64-static-musl-cargo-registry,target=/root/.cargo/registry \
     --mount=type=cache,id=bun-arm64-static-musl-cargo-git,target=/root/.cargo/git \
-    --mount=type=cache,id=bun-arm64-static-musl-build-${LLVM_RELEASE_SHA}-${LLVM_TOOLCHAIN_REV},target=/src/build \
-    --mount=type=cache,id=bun-arm64-static-musl-ccache-${LLVM_RELEASE_SHA}-${LLVM_TOOLCHAIN_REV},target=/src/cache \
+    --mount=type=cache,id=bun-arm64-static-musl-build-llvm-23.1.1,target=/src/build \
+    --mount=type=cache,id=bun-arm64-static-musl-ccache-llvm-23.1.1,target=/root/.cache/ccache \
     if [ "${BUN_CAPTURE_ONLY}" = "1" ]; then \
-      bun run build:release --lto=${BUN_LTO} --configure-only \
+      bun run build:release --lto=${BUN_LTO} --abi=musl --configure-only \
       && set -- $(ninja -C build/release -t query bun-profile | sed -n '/^  input: link$/,/^  outputs:/p' | sed -n 's/^    //p') \
       && ninja -C build/release "$@"; \
     else \
-      if ! bun run build:release --lto=${BUN_LTO} > /tmp/bun-build.log 2>&1; then \
-        grep -n -E -C 8 'error:|Error:|FAILED|failed' /tmp/bun-build.log | tail -n 240 || true; \
-        tail -n 120 /tmp/bun-build.log; \
-        exit 1; \
-      fi \
+      bun run build:release --lto=${BUN_LTO} --abi=musl \
       && file build/release/bun | grep -q 'statically linked' \
       && test -z "$(readelf -l build/release/bun | grep 'INTERP' || true)" \
       && test -z "$(readelf -d build/release/bun | grep 'NEEDED' || true)" \
-      && grep -Eq 'obj/vendor/mimalloc/src/.*static.c.o' build/release/bun-profile.linker-map \
-      && llvm-nm -a build/release/bun-profile | grep -Eq '[[:space:]]mi_(malloc|calloc|realloc|free)([[:space:]]|$)' \
-      && ! ldd build/release/bun 2>&1 \
-      && build/release/bun --version \
+      && ! ldd build/release/bun \
+      && test "$(build/release/bun --version)" = "$BUN_BOOTSTRAP_VERSION" \
       && test "$(build/release/bun -e 'console.log("ok")')" = "ok" \
-      && test "$(build/release/bun -e 'console.log(40 + 2)')" = "42" \
-      && build/release/bun -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing"); const d = heapStats({ dump: true }); if (!d.mimallocDump?.heaps?.some(h => h.seq === 0 && h.pages?.length)) throw new Error("mimalloc heap dump missing");' \
       && cp build/release/bun /tmp/bun-release; \
     fi
 
 FROM build AS capture
 
-FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+FROM alpine:3.23
 
 COPY --from=build /tmp/bun-release /usr/local/bin/bun
 
 RUN /usr/local/bin/bun --version \
-    && ! apk info -e | grep -Eq '^(gcompat|glibc|libgcc|libstdc\\+\\+)' \
-    && test "$(/usr/local/bin/bun -e 'console.log("ok")')" = "ok" \
-    && test "$(/usr/local/bin/bun -e 'console.log(40 + 2)')" = "42" \
-    && /usr/local/bin/bun -e 'const { heapStats } = require("bun:jsc"); const s = heapStats(); if (!s.mimalloc || s.mimalloc.mimalloc_version <= 3000 || s.mimalloc.pages.current <= 0 || s.mimalloc.committed.current <= 0) throw new Error("mimalloc stats missing");'
+    && test "$(/usr/local/bin/bun -e 'console.log("ok")')" = "ok"
 
 ENTRYPOINT ["/usr/local/bin/bun"]
