@@ -4,6 +4,7 @@
 **/CMakeCache.txt
 **/node_modules
 .git
+.work
 examples
 node_modules
 packages/**/bun
